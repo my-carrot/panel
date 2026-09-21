@@ -11,7 +11,10 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  ContainerBuilder,
+  TextDisplayBuilder,
+  MessageFlags
 } from 'discord.js';
 import dotenv from 'dotenv';
 import fs from 'fs';
@@ -275,24 +278,23 @@ async function setupPermanentPanel() {
       return;
     }
 
-    const embed = createPanelEmbed();
-    const row = createPanelButtons();
+    const payload = buildPanelCard();
 
     if (CONFIG.panelMessageId) {
       // Update existing message
       try {
         const message = await channel.messages.fetch(CONFIG.panelMessageId);
-        await message.edit({ embeds: [embed], components: [row] });
+        await message.edit(payload);
         console.log('[Panel] Updated existing panel message');
       } catch (error) {
         console.error('[Panel] Could not update message, creating new one:', error);
-        const newMessage = await channel.send({ embeds: [embed], components: [row] });
+        const newMessage = await channel.send(payload);
         console.log('[Panel] Created new panel message:', newMessage.id);
         console.log('[Panel] Add this to .env: PANEL_MESSAGE_ID=' + newMessage.id);
       }
     } else {
       // Create new message
-      const newMessage = await channel.send({ embeds: [embed], components: [row] });
+      const newMessage = await channel.send(payload);
       console.log('[Panel] Created new panel message:', newMessage.id);
       console.log('[Panel] Add this to .env: PANEL_MESSAGE_ID=' + newMessage.id);
     }
@@ -301,37 +303,67 @@ async function setupPermanentPanel() {
   }
 }
 
-// Create panel embed
-function createPanelEmbed() {
-  return new EmbedBuilder()
-    .setColor(0x7367f0)
-    .setTitle('JinHub - Panel')
-    .setDescription(
-      '**HWID Reset System**\n\n' +
-      'If you\'re a buyer or want to reset your HWID, click on the button below.\n\n' +
-      'Each key can be reset once every **2 days**.'
-    )
-    .setFooter({ text: 'JinHub System • Cooldown: 2 days' })
-    .setTimestamp();
-}
+// Purchase access link (shown via the "Open Pricing" link button)
+const PURCHASE_URL = 'https://discordapp.com/channels/1409740790141423738/1443912803881586731';
 
-// Create panel buttons
+// Build the panel buttons (all green / Success style)
 function createPanelButtons() {
   return new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
-        .setCustomId('redeem_key')
-        .setLabel('🔑 Redeem Key')
+        .setCustomId('purchase_key')
+        .setLabel('💳 Purchase')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('reset_hwid_modal')
         .setLabel('⚙️ Reset HWID')
-        .setStyle(ButtonStyle.Danger),
+        .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('check_cooldown_list')
         .setLabel('⏰ Check Cooldown')
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Success)
     );
+}
+
+// Build the panel card using Components V2 (no embed, no left accent bar,
+// buttons live inside the same box as the title/description)
+function buildPanelCard() {
+  const container = new ContainerBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('## JinHub - Panel'),
+      new TextDisplayBuilder().setContent(
+        '**HWID Reset System**\n\n' +
+        'If you\'re a buyer or want to reset your HWID, click on the button below.\n\n' +
+        'Each key can be reset once every **2 days**.'
+      )
+    )
+    .addActionRowComponents(createPanelButtons());
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [container],
+  };
+}
+
+// Build the "HWID Reset Successful" card using Components V2 (no embed, no left accent bar)
+function buildResetSuccessCard({ key, tierName, nextResetDate }) {
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent('## <:check1:1551389827159556177> HWID Reset Successful!'),
+    new TextDisplayBuilder().setContent('Your hardware ID has been reset successfully.'),
+    new TextDisplayBuilder().setContent(`**Key**\n\`${key}\``),
+    new TextDisplayBuilder().setContent(`**Tier**\n${tierName}`),
+    new TextDisplayBuilder().setContent(
+      `<a:timesand:1551390654804795392> **Next Reset Available**\n<t:${Math.floor(nextResetDate.getTime() / 1000)}:R>`
+    ),
+    new TextDisplayBuilder().setContent(
+      `-# JinHub System • You can now bind this key to a new device`
+    )
+  );
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [container],
+  };
 }
 
 // Handle slash commands and interactions
@@ -646,31 +678,13 @@ client.on('interactionCreate', async interaction => {
       
       const nextResetDate = new Date(Date.now() + (CONFIG.cooldownHours * 60 * 60 * 1000));
       
-      const successEmbed = new EmbedBuilder()
-        .setColor(0x22c55e)
-        .setTitle('✅ HWID Reset Successful!')
-        .setDescription('Your hardware ID has been reset successfully.')
-        .addFields(
-          {
-            name: '🔑 Key',
-            value: `\`${key}\``,
-            inline: true
-          },
-          {
-            name: '📊 Tier',
-            value: `${verifyResult.tierName || verifyResult.tier}`,
-            inline: true
-          },
-          {
-            name: '⏰ Next Reset Available',
-            value: `<t:${Math.floor(nextResetDate.getTime() / 1000)}:R>`,
-            inline: false
-          }
-        )
-        .setFooter({ text: 'JinHub System • You can now bind this key to a new device' })
-        .setTimestamp();
+      const successPayload = buildResetSuccessCard({
+        key,
+        tierName: verifyResult.tierName || verifyResult.tier,
+        nextResetDate
+      });
       
-      await replyWithAutoDelete(interaction, { embeds: [successEmbed] });
+      await replyWithAutoDelete(interaction, successPayload);
 
       // Log to channel if configured
       if (CONFIG.logChannelId) {
@@ -703,30 +717,20 @@ client.on('interactionCreate', async interaction => {
 
   // Handle button interactions
   if (interaction.isButton()) {
-    // Redeem Key button
-    if (interaction.customId === 'redeem_key') {
-      const embed = new EmbedBuilder()
-        .setColor(0x22c55e)
-        .setTitle('🔑 Redeem a Key')
-        .setDescription(
-          '**How to get JinHub keys:**\n\n' +
-          '**Free Keys** (Checkpoint-based):\n' +
-          '• Visit our website\n' +
-          '• Complete checkpoints (Lootlabs, Bosstellar, Work.ink.)\n' +
-          '• Get instant free key\n' +
-          '• Format: `JinHub-XXXXXX-XXXXXX-XXXXXX`\n\n' +
-          '**Premium Keys**:\n' +
-          '• Purchase from our panel\n' +
-          '• Longer duration & HWID protection\n' +
-          '• Format: `XXX-XXXX-XXXX-XXXX`\n\n' +
-          '**Need to reset HWID?**\n' +
-          'Premium & Freemium keys support HWID reset.\n' +
-          'Use the "⚙️ Reset HWID" button for Premium keys.'
-        )
-        .setFooter({ text: 'JinHub System • Free & Premium keys available' })
-        .setTimestamp();
-      
-      return await interaction.reply({ embeds: [embed], ephemeral: true });
+    // Purchase button -> show a link button to the pricing page
+    if (interaction.customId === 'purchase_key') {
+      const linkRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel('Open Pricing')
+          .setStyle(ButtonStyle.Link)
+          .setURL(PURCHASE_URL)
+      );
+
+      return await interaction.reply({
+        content: 'Open the Real pricing page to purchase access.',
+        components: [linkRow],
+        ephemeral: true
+      });
     }
     
     // Reset HWID button - show modal
@@ -793,11 +797,10 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'setup-panel') {
     await interaction.deferReply({ ephemeral: true });
 
-    const embed = createPanelEmbed();
-    const row = createPanelButtons();
+    const payload = buildPanelCard();
 
     try {
-      const message = await interaction.channel.send({ embeds: [embed], components: [row] });
+      const message = await interaction.channel.send(payload);
       
       const successEmbed = new EmbedBuilder()
         .setColor(0x22c55e)
@@ -831,7 +834,6 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // /check-cooldown command
   // /check-cooldown command
   else if (commandName === 'check-cooldown') {
     await interaction.deferReply({ ephemeral: true });

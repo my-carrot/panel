@@ -1,7 +1,6 @@
 import { 
   Client, 
   GatewayIntentBits, 
-  EmbedBuilder, 
   SlashCommandBuilder, 
   REST, 
   Routes,
@@ -14,6 +13,8 @@ import {
   PermissionFlagsBits,
   ContainerBuilder,
   TextDisplayBuilder,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
   MessageFlags
 } from 'discord.js';
 import dotenv from 'dotenv';
@@ -306,21 +307,21 @@ async function setupPermanentPanel() {
 // Purchase access link (shown via the "Open Pricing" link button)
 const PURCHASE_URL = 'https://discordapp.com/channels/1409740790141423738/1443912803881586731';
 
-// Build the panel buttons (all green / Success style)
+// Build the panel buttons (all green / Success style, no emoji)
 function createPanelButtons() {
   return new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
         .setCustomId('purchase_key')
-        .setLabel('💳 Purchase')
+        .setLabel('Purchase')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('reset_hwid_modal')
-        .setLabel('⚙️ Reset HWID')
+        .setLabel('Reset HWID')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('check_cooldown_list')
-        .setLabel('⏰ Check Cooldown')
+        .setLabel('Check Cooldown')
         .setStyle(ButtonStyle.Success)
     );
 }
@@ -329,13 +330,18 @@ function createPanelButtons() {
 // buttons live inside the same box as the title/description)
 function buildPanelCard() {
   const container = new ContainerBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('## JinHub - Panel'))
+    .addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
+    )
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('## JinHub - Panel'),
       new TextDisplayBuilder().setContent(
-        '**HWID Reset System**\n\n' +
-        'If you\'re a buyer or want to reset your HWID, click on the button below.\n\n' +
-        'Each key can be reset once every **2 days**.'
+        '**Manage Your Freemium/Premium key From Panel**\n\n' +
+        '**Purchase** buy license key • **Reset HWID**\nReset hardware ID your device • **Check Cooldown** Time until your next reset'
       )
+    )
+    .addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
     )
     .addActionRowComponents(createPanelButtons());
 
@@ -358,6 +364,48 @@ function buildResetSuccessCard({ key, tierName, nextResetDate }) {
     new TextDisplayBuilder().setContent(
       `-# JinHub System • You can now bind this key to a new device`
     )
+  );
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [container],
+  };
+}
+
+// Build the "Your Cooldown Status" card using Components V2 (no embed, no left accent bar)
+function buildCooldownStatusCard(userCooldowns) {
+  const lines = [];
+
+  lines.push('## <a:timesand:1551390654804795392> Your Cooldown Status');
+
+  if (userCooldowns.length === 0) {
+    lines.push('You haven\'t reset any keys yet.\n\nUse the "Reset HWID" button to reset a key.');
+  } else {
+    lines.push(`Total keys reset: **${userCooldowns.length}**`);
+
+    for (const cd of userCooldowns) {
+      const status = cd.canReset ? 'Ready' : `<t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
+      lines.push(`**${cd.key}**\nLast: <t:${Math.floor(cd.lastReset.getTime() / 1000)}:R>\n${status}`);
+    }
+  }
+
+  lines.push('-# JinHub System • Cooldown: 2 days');
+
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    ...lines.map((c) => new TextDisplayBuilder().setContent(c))
+  );
+
+  return {
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    components: [container],
+  };
+}
+
+// Generic helper: build a plain Components V2 card from an array of text blocks.
+// Each entry becomes its own TextDisplay component (rendered stacked, no embed, no accent bar).
+function buildCard(lines) {
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    ...lines.map((c) => new TextDisplayBuilder().setContent(c))
   );
 
   return {
@@ -390,49 +438,25 @@ client.on('interactionCreate', async interaction => {
       const freeFormat = /^JinHub-[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$/;
       
       if (!premiumFormat.test(key) && !freeFormat.test(key)) {
-        const errorEmbed = new EmbedBuilder()
-          .setColor(0xef4444)
-          .setTitle('❌ Invalid Key Format')
-          .setDescription('Please provide a valid JinHub key format.')
-          .addFields({
-            name: 'Valid Premium Format',
-            value: '`XXX-XXXX-XXXX-XXXX`\n`XXX-XXXX-XXXX-XXXX`\n`XXX-XXXX-XXXX-XXXX`\n`XXX-XXXX-XXXX-XXXX`',
-            inline: true
-          },
-          {
-            name: 'Valid Free Format',
-            value: '`JinHub-XXXXXX-XXXXXX-XXXXXX`',
-            inline: true
-          })
-          .setFooter({ text: 'JinHub System' })
-          .setTimestamp();
-        
-        return await replyWithAutoDelete(interaction, { embeds: [errorEmbed] });
+        return await replyWithAutoDelete(interaction, buildCard([
+          '## ❌ Invalid Key Format',
+          'Please provide a valid JinHub key format.',
+          '**Valid Premium Format**\n`XXX-XXXX-XXXX-XXXX`',
+          '**Valid Free Format**\n`JinHub-XXXXXX-XXXXXX-XXXXXX`',
+          '-# JinHub System',
+        ]));
       }
 
       // Check cooldown
       const cooldownCheck = isOnCooldown(user.id, key);
       if (cooldownCheck.onCooldown) {
-        const cooldownEmbed = new EmbedBuilder()
-          .setColor(0xf59e0b)
-          .setTitle('⏰ Reset on Cooldown')
-          .setDescription('You need to wait before resetting this key again.')
-          .addFields(
-            {
-              name: '⏳ Time Remaining',
-              value: `${cooldownCheck.hoursRemaining}h ${cooldownCheck.minutesRemaining}m`,
-              inline: true
-            },
-            {
-              name: '📅 Next Reset Available',
-              value: `<t:${Math.floor(cooldownCheck.nextResetDate.getTime() / 1000)}:R>`,
-              inline: true
-            }
-          )
-          .setFooter({ text: 'JinHub System • Cooldown: 2 days' })
-          .setTimestamp();
-        
-        return await replyWithAutoDelete(interaction, { embeds: [cooldownEmbed] });
+        return await replyWithAutoDelete(interaction, buildCard([
+          '## ⏰ Reset on Cooldown',
+          'You need to wait before resetting this key again.',
+          `**Time Remaining**\n${cooldownCheck.hoursRemaining}h ${cooldownCheck.minutesRemaining}m`,
+          `**Next Reset Available**\n<t:${Math.floor(cooldownCheck.nextResetDate.getTime() / 1000)}:R>`,
+          '-# JinHub System • Cooldown: 2 days',
+        ]));
       }
 
       // Verify key
@@ -498,18 +522,12 @@ client.on('interactionCreate', async interaction => {
       }
       
       if (!verifyResult || !verifyResult.valid) {
-        const errorEmbed = new EmbedBuilder()
-          .setColor(0xef4444)
-          .setTitle('❌ Invalid Key')
-          .setDescription('This key does not exist or is invalid.')
-          .addFields({
-            name: 'Error',
-            value: verifyResult?.error || 'Key not found in database'
-          })
-          .setFooter({ text: 'JinHub System' })
-          .setTimestamp();
-        
-        return await replyWithAutoDelete(interaction, { embeds: [errorEmbed] });
+        return await replyWithAutoDelete(interaction, buildCard([
+          '## ❌ Invalid Key',
+          'This key does not exist or is invalid.',
+          `**Error**\n${verifyResult?.error || 'Key not found in database'}`,
+          '-# JinHub System',
+        ]));
       }
 
       // Reset HWID
@@ -659,18 +677,12 @@ client.on('interactionCreate', async interaction => {
       }
       
       if (!resetResult.success) {
-        const errorEmbed = new EmbedBuilder()
-          .setColor(0xef4444)
-          .setTitle('❌ Reset Failed')
-          .setDescription('Failed to reset HWID. Please try again or contact support.')
-          .addFields({
-            name: 'Error',
-            value: resetResult.error || 'Unknown error'
-          })
-          .setFooter({ text: 'JinHub System' })
-          .setTimestamp();
-        
-        return await replyWithAutoDelete(interaction, { embeds: [errorEmbed] });
+        return await replyWithAutoDelete(interaction, buildCard([
+          '## ❌ Reset Failed',
+          'Failed to reset HWID. Please try again or contact support.',
+          `**Error**\n${resetResult.error || 'Unknown error'}`,
+          '-# JinHub System',
+        ]));
       }
 
       // Success! Set cooldown
@@ -691,17 +703,12 @@ client.on('interactionCreate', async interaction => {
         try {
           const logChannel = await client.channels.fetch(CONFIG.logChannelId);
           if (logChannel) {
-            const logEmbed = new EmbedBuilder()
-              .setColor(0x3b82f6)
-              .setTitle('🔄 HWID Reset Log')
-              .addFields(
-                { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
-                { name: 'Key', value: `\`${key}\``, inline: true },
-                { name: 'Tier', value: verifyResult.tierName || verifyResult.tier, inline: true }
-              )
-              .setTimestamp();
-            
-            await logChannel.send({ embeds: [logEmbed] });
+            await logChannel.send(buildCard([
+              '## 🔄 HWID Reset Log',
+              `**User**\n${user.tag} (${user.id})`,
+              `**Key**\n\`${key}\``,
+              `**Tier**\n${verifyResult.tierName || verifyResult.tier}`,
+            ]));
           }
         } catch (error) {
           console.error('[Log] Error sending to log channel:', error);
@@ -721,13 +728,13 @@ client.on('interactionCreate', async interaction => {
     if (interaction.customId === 'purchase_key') {
       const linkRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setLabel('Open Pricing')
+          .setLabel('Open Ticket')
           .setStyle(ButtonStyle.Link)
           .setURL(PURCHASE_URL)
       );
 
       return await interaction.reply({
-        content: 'Open the Real pricing page to purchase access.',
+        content: 'Open the JinHub pricing page to purchase access.',
         components: [linkRow],
         ephemeral: true
       });
@@ -757,35 +764,7 @@ client.on('interactionCreate', async interaction => {
     // Check Cooldown button
     if (interaction.customId === 'check_cooldown_list') {
       const userCooldowns = getUserCooldownInfo(user.id);
-      
-      if (userCooldowns.length === 0) {
-        const embed = new EmbedBuilder()
-          .setColor(0x6b7280)
-          .setTitle('⏰ Your Cooldown Status')
-          .setDescription('You haven\'t reset any keys yet.\n\nUse the "⚙️ Reset HWID" button to reset a key.')
-          .setFooter({ text: 'JinHub System • Cooldown: 2 days' })
-          .setTimestamp();
-        
-        return await interaction.reply({ embeds: [embed], ephemeral: true });
-      }
-      
-      const embed = new EmbedBuilder()
-        .setColor(0x3b82f6)
-        .setTitle('⏰ Your Cooldown Status')
-        .setDescription(`Total keys reset: **${userCooldowns.length}**`)
-        .setFooter({ text: 'JinHub System • Cooldown: 2 days' })
-        .setTimestamp();
-      
-      userCooldowns.forEach(cd => {
-        const status = cd.canReset ? '✅ Ready' : `⏰ <t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
-        embed.addFields({
-          name: `🔑 ${cd.key}`,
-          value: `Last: <t:${Math.floor(cd.lastReset.getTime() / 1000)}:R>\n${status}`,
-          inline: true
-        });
-      });
-      
-      return await interaction.reply({ embeds: [embed], ephemeral: true });
+      return await interaction.reply(buildCooldownStatusCard(userCooldowns));
     }
     
     return;
@@ -802,33 +781,25 @@ client.on('interactionCreate', async interaction => {
     try {
       const message = await interaction.channel.send(payload);
       
-      const successEmbed = new EmbedBuilder()
-        .setColor(0x22c55e)
-        .setTitle('✅ Panel Setup Complete')
-        .setDescription(
-          'Permanent panel has been created in this channel.\n\n' +
-          '**Important:** Add these to your `.env` file:\n' +
-          '```env\n' +
-          `PANEL_CHANNEL_ID=${interaction.channel.id}\n` +
-          `PANEL_MESSAGE_ID=${message.id}\n` +
-          '```\n' +
-          'Then restart the bot to enable auto-update on restart.'
-        )
-        .setFooter({ text: 'JinHub System' })
-        .setTimestamp();
-      
-      await interaction.editReply({ embeds: [successEmbed] });
+      await interaction.editReply(buildCard([
+        '## ✅ Panel Setup Complete',
+        'Permanent panel has been created in this channel.\n\n' +
+        '**Important:** Add these to your `.env` file:\n' +
+        '```env\n' +
+        `PANEL_CHANNEL_ID=${interaction.channel.id}\n` +
+        `PANEL_MESSAGE_ID=${message.id}\n` +
+        '```\n' +
+        'Then restart the bot to enable auto-update on restart.',
+        '-# JinHub System',
+      ]));
       
       console.log('[Panel] Setup complete - Channel:', interaction.channel.id, 'Message:', message.id);
     } catch (error) {
-      const errorEmbed = new EmbedBuilder()
-        .setColor(0xef4444)
-        .setTitle('❌ Setup Failed')
-        .setDescription('Failed to create panel. Make sure bot has permission to send messages.')
-        .addFields({ name: 'Error', value: error.message })
-        .setTimestamp();
-      
-      await interaction.editReply({ embeds: [errorEmbed] });
+      await interaction.editReply(buildCard([
+        '## ❌ Setup Failed',
+        'Failed to create panel. Make sure bot has permission to send messages.',
+        `**Error**\n${error.message}`,
+      ]));
     }
     
     return;
@@ -844,65 +815,36 @@ client.on('interactionCreate', async interaction => {
       const cleanKey = key.toUpperCase().trim();
       const cooldownCheck = isOnCooldown(user.id, cleanKey);
       
-      const embed = new EmbedBuilder()
-        .setColor(cooldownCheck.onCooldown ? 0xf59e0b : 0x22c55e)
-        .setTitle('⏰ Cooldown Status')
-        .addFields({
-          name: '🔑 Key',
-          value: `\`${cleanKey}\``,
-          inline: false
-        });
+      const lines = ['## ⏰ Cooldown Status', `**Key**\n\`${cleanKey}\``];
       
       if (cooldownCheck.onCooldown) {
-        embed.addFields(
-          {
-            name: '⏳ Time Remaining',
-            value: `${cooldownCheck.hoursRemaining}h ${cooldownCheck.minutesRemaining}m`,
-            inline: true
-          },
-          {
-            name: '📅 Next Reset',
-            value: `<t:${Math.floor(cooldownCheck.nextResetDate.getTime() / 1000)}:R>`,
-            inline: true
-          }
-        );
-        embed.setDescription('❌ This key is on cooldown');
+        lines.push('❌ This key is on cooldown');
+        lines.push(`**Time Remaining**\n${cooldownCheck.hoursRemaining}h ${cooldownCheck.minutesRemaining}m`);
+        lines.push(`**Next Reset**\n<t:${Math.floor(cooldownCheck.nextResetDate.getTime() / 1000)}:R>`);
       } else {
-        embed.setDescription('✅ This key can be reset now!');
+        lines.push('✅ This key can be reset now!');
       }
       
-      embed.setTimestamp();
-      return await interaction.editReply({ embeds: [embed] });
+      return await interaction.editReply(buildCard(lines));
     } else {
       // Show all user's cooldowns
       const userCooldowns = getUserCooldownInfo(user.id);
       
       if (userCooldowns.length === 0) {
-        const embed = new EmbedBuilder()
-          .setColor(0x6b7280)
-          .setTitle('📋 Your Reset History')
-          .setDescription('You haven\'t reset any keys yet.')
-          .setTimestamp();
-        
-        return await interaction.editReply({ embeds: [embed] });
+        return await interaction.editReply(buildCard([
+          '## 📋 Your Reset History',
+          'You haven\'t reset any keys yet.',
+        ]));
       }
       
-      const embed = new EmbedBuilder()
-        .setColor(0x3b82f6)
-        .setTitle('📋 Your Reset History')
-        .setDescription(`Total keys reset: **${userCooldowns.length}**`)
-        .setTimestamp();
+      const lines = ['## 📋 Your Reset History', `Total keys reset: **${userCooldowns.length}**`];
       
       userCooldowns.forEach(cd => {
-        const status = cd.canReset ? '✅ Can reset' : `⏰ <t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
-        embed.addFields({
-          name: `🔑 ${cd.key}`,
-          value: `Last reset: <t:${Math.floor(cd.lastReset.getTime() / 1000)}:R>\n${status}`,
-          inline: false
-        });
+        const status = cd.canReset ? 'Can reset' : `<t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
+        lines.push(`**${cd.key}**\nLast reset: <t:${Math.floor(cd.lastReset.getTime() / 1000)}:R>\n${status}`);
       });
       
-      return await interaction.editReply({ embeds: [embed] });
+      return await interaction.editReply(buildCard(lines));
     }
   }
 
@@ -913,42 +855,28 @@ client.on('interactionCreate', async interaction => {
     const userCooldowns = getUserCooldownInfo(user.id);
     
     if (userCooldowns.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0x6b7280)
-        .setTitle('📋 Your Reset History')
-        .setDescription('You haven\'t reset any keys yet.\n\nUse `/reset-hwid` to reset a key\'s HWID.')
-        .addFields({
-          name: 'ℹ️ How it works',
-          value: `• Each key can be reset once every **${CONFIG.cooldownHours / 24} days**\n• Cooldown applies to all tiers (Free & Premium)\n• After reset, you can bind the key to a new device`
-        })
-        .setTimestamp();
-      
-      return await interaction.editReply({ embeds: [embed] });
+      return await interaction.editReply(buildCard([
+        '## 📋 Your Reset History',
+        'You haven\'t reset any keys yet.\n\nUse `/reset-hwid` to reset a key\'s HWID.',
+        `**How it works**\n• Each key can be reset once every **${CONFIG.cooldownHours / 24} days**\n• Cooldown applies to all tiers (Free & Premium)\n• After reset, you can bind the key to a new device`,
+      ]));
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(0x7367f0)
-      .setTitle('📋 Your HWID Reset History')
-      .setDescription(`You have reset **${userCooldowns.length}** key(s)`)
-      .setTimestamp();
+    const lines = ['## 📋 Your HWID Reset History', `You have reset **${userCooldowns.length}** key(s)`];
     
     userCooldowns.forEach((cd, index) => {
       const status = cd.canReset 
-        ? '✅ **Ready to reset**' 
-        : `⏰ Next reset: <t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
+        ? '**Ready to reset**' 
+        : `Next reset: <t:${Math.floor(cd.nextReset.getTime() / 1000)}:R>`;
       
       const lastResetText = `<t:${Math.floor(cd.lastReset.getTime() / 1000)}:F>`;
       
-      embed.addFields({
-        name: `${index + 1}. 🔑 ${cd.key}`,
-        value: `Last reset: ${lastResetText}\n${status}`,
-        inline: false
-      });
+      lines.push(`**${index + 1}. ${cd.key}**\nLast reset: ${lastResetText}\n${status}`);
     });
     
-    embed.setFooter({ text: `Cooldown period: ${CONFIG.cooldownHours / 24} days` });
+    lines.push(`-# Cooldown period: ${CONFIG.cooldownHours / 24} days`);
     
-    return await interaction.editReply({ embeds: [embed] });
+    return await interaction.editReply(buildCard(lines));
   }
 });
 

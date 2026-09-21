@@ -1,0 +1,18 @@
+{
+  "name": "jinhub-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for JinHub HWID reset with cooldown system",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": ["discord", "bot", "jinhub", "hwid", "reset"],
+  "author": "JinHub Team",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.1"
+  }
+}
